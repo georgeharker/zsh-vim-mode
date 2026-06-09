@@ -148,26 +148,29 @@ an env var (e.g. `$VIMODE`) that the `oh-my-posh` binary reads at render time.
 
 Append a function to `vi_mode_before_redraw_functions`. The plugin calls each
 entry — inside the ZLE widget, right before it issues `reset-prompt` — so you
-can let the prompt re-render through its **own** machinery. For oh-my-posh that
-is just its precmd renderer: it re-renders the prompt and, via `set_poshcontext`,
-refreshes `VIMODE` for free.
+re-render omp there, then the plugin's `reset-prompt` displays the result:
 
 ```zsh
-# oh-my-posh reads $VIMODE at render time; set_poshcontext is its own per-render
-# context hook, so just point it at the indicator and register omp's renderer.
 function set_poshcontext() { export VIMODE="$(vi_mode_prompt_info)" }
-vi_mode_before_redraw_functions+=(_omp_precmd)
+function _vimode_omp_render() {
+  set_poshcontext                   # refresh $VIMODE for the new mode
+  RPROMPT=$(_omp_get_prompt right)   # re-render the block that shows it
+}
+vi_mode_before_redraw_functions+=(_vimode_omp_render)
 ```
 
-That's the whole integration: `_omp_precmd` re-renders omp (the same call omp
-runs each precmd), the plugin then issues `reset-prompt`. Note it re-renders the
-*entire* prompt each mode change, which also re-captures `$?` and execution time
-— so the exit-status and timing segments reset on a mode switch. If that bothers
-you, re-render only the block carrying the indicator instead, e.g.
-`RPROMPT=$(_omp_get_prompt right)` (oh-my-posh's own block renderer, which reuses
-omp's cached state so the status/timing segments stay put). Either way it runs on
-every mode change, so keep the render cheap. Works whether or not oh-my-posh
-streaming is enabled; streaming only affects how the left prompt is delivered.
+`_omp_get_prompt` is the least-invasive render omp exposes: it only *reads*
+omp's cached state (status, execution-time, …) and prints, so it doesn't reset
+those segments — it's the same call omp's tooltip feature uses. Render only the
+block carrying the indicator (`right` here).
+
+The simpler `vi_mode_before_redraw_functions+=(_omp_precmd)` also works — it
+re-runs omp's whole precmd render (and refreshes `VIMODE` via `set_poshcontext`
+itself) — but it re-captures `$?` and execution time, so the status and timing
+segments reset on every mode change. Prefer `_omp_get_prompt`.
+
+Either way it runs on every mode change, so keep the render cheap. Works whether
+or not oh-my-posh streaming is enabled; streaming only affects the left prompt.
 
 ## Cursor styles
 

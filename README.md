@@ -132,6 +132,30 @@ RPROMPT='$(vi_mode_prompt_info)'"$RPROMPT"
 The single quotes are important: they defer evaluation so the indicator is
 recomputed on each redraw.
 
+### Prompts that bake the mode in at render time (oh-my-posh, etc.)
+
+Some prompts don't re-expand a `$(vi_mode_prompt_info)` on every redraw — they
+render once per `precmd` into a static string. oh-my-posh is the common case:
+its vi indicator comes from a `$VIMODE` env var read by the `oh-my-posh` binary
+at render time, so a bare `zle reset-prompt` on a mode change shows the *old*
+mode until the next command.
+
+For those, append a function to `vi_mode_before_redraw_functions`. The plugin
+calls each entry, inside the ZLE widget, right before it redraws on a mode
+change — so you can recompute the state and re-render the affected block first:
+
+```zsh
+# oh-my-posh: VIMODE lives in the rprompt block of the theme
+function _vimode_omp_refresh() {
+  export VIMODE="$(vi_mode_prompt_info)"   # or call oh-my-posh's set_poshcontext
+  RPROMPT=$(_omp_get_prompt right)         # re-render the block that shows it
+}
+vi_mode_before_redraw_functions+=(_vimode_omp_refresh)
+```
+
+This re-renders only the prompt block that carries the indicator. Note it runs
+on every mode change, so keep it to the cheapest render that updates the mode.
+
 ## Cursor styles
 
 ```zsh
@@ -140,8 +164,14 @@ VI_MODE_SET_CURSOR=true
 VI_MODE_CURSOR_NORMAL=2   # solid block
 VI_MODE_CURSOR_VISUAL=6   # solid line
 VI_MODE_CURSOR_INSERT=6   # solid line
-VI_MODE_CURSOR_OPPEND=0   # blinking block
+VI_MODE_CURSOR_OPPEND=2   # follows NORMAL (see below)
 ```
+
+`VI_MODE_CURSOR_OPPEND` (the cursor while an operator like `d` waits for its
+motion) defaults to the **normal-mode** shape, not omz's `0`. ZLE doesn't
+reliably fire `zle-keymap-select` on the `viopp → vicmd` return, so a distinct
+operator-pending shape tends to get stuck after e.g. `dw`; keeping it equal to
+normal avoids that. Set it explicitly if you want a separate oppend cursor.
 
 `0,1` blinking block · `2` solid block · `3` blinking underline ·
 `4` solid underline · `5` blinking line · `6` solid line.

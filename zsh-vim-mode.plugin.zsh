@@ -50,7 +50,13 @@ typeset -g VI_MODE_SET_CURSOR
 typeset -g VI_MODE_CURSOR_NORMAL=${VI_MODE_CURSOR_NORMAL:=2}
 typeset -g VI_MODE_CURSOR_VISUAL=${VI_MODE_CURSOR_VISUAL:=6}
 typeset -g VI_MODE_CURSOR_INSERT=${VI_MODE_CURSOR_INSERT:=6}
-typeset -g VI_MODE_CURSOR_OPPEND=${VI_MODE_CURSOR_OPPEND:=0}
+# Operator-pending (e.g. the `d` of `dw`). Defaults to the normal-mode shape
+# rather than omz's `0` (terminal default): ZLE does not reliably fire
+# `zle-keymap-select` on the viopp -> vicmd return, so a distinct oppend shape
+# tends to get "stuck" after an operator. Keeping it the same as normal means
+# the cursor simply stays a block throughout. Override if you really want a
+# distinct operator-pending cursor.
+typeset -g VI_MODE_CURSOR_OPPEND=${VI_MODE_CURSOR_OPPEND:=$VI_MODE_CURSOR_NORMAL}
 
 typeset -g VI_KEYMAP=${VI_KEYMAP:=main}
 
@@ -101,11 +107,30 @@ function _vi-mode-should-reset-prompt() {
   esac
 }
 
+# Functions listed here are called (in order), inside the ZLE widget, right
+# before each mode-change prompt redraw. Use this to refresh prompt state that
+# is baked in at render time and therefore wouldn't update on a bare
+# `reset-prompt`. The canonical case is oh-my-posh: its vi indicator comes from
+# the $VIMODE env var, which is only recomputed in precmd, so a redraw alone
+# shows a stale mode. An integration registers a function that recomputes the
+# env var and re-renders the affected prompt. For example:
+#
+#   function _my_omp_vimode() {
+#     set_poshcontext                     # export VIMODE="$(vi_mode_prompt_info)"
+#     RPROMPT=$(_omp_get_prompt right)    # re-render the block that shows it
+#   }
+#   vi_mode_before_redraw_functions+=(_my_omp_vimode)
+typeset -ga vi_mode_before_redraw_functions
+
 # Redraw the command line / prompt immediately. Safe to call from any ZLE
 # widget; a no-op outside ZLE.
 function _vi-mode-reset-prompt() {
   # ${WIDGET} is only set while a ZLE widget is executing.
   [[ -n "${WIDGET:-}" ]] || return
+  local _fn
+  for _fn in "${vi_mode_before_redraw_functions[@]}"; do
+    (( ${+functions[$_fn]} )) && "$_fn"
+  done
   zle reset-prompt
   zle -R
 }

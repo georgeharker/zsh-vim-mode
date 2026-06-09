@@ -147,24 +147,27 @@ redraws the *old* mode. oh-my-posh is the common case: its indicator comes from
 an env var (e.g. `$VIMODE`) that the `oh-my-posh` binary reads at render time.
 
 Append a function to `vi_mode_before_redraw_functions`. The plugin calls each
-entry — inside the ZLE widget, right before it redraws — so you can refresh the
-env var and let the prompt's **own** renderer rebuild the affected block:
+entry — inside the ZLE widget, right before it issues `reset-prompt` — so you
+can let the prompt re-render through its **own** machinery. For oh-my-posh that
+is just its precmd renderer: it re-renders the prompt and, via `set_poshcontext`,
+refreshes `VIMODE` for free.
 
 ```zsh
-# oh-my-posh: VIMODE lives in the theme's rprompt block.
-# _omp_get_prompt is oh-my-posh's own renderer (it uses it internally), so this
-# anchors through omp rather than hand-building a prompt string.
-function _vimode_omp_refresh() {
-  set_poshcontext                   # exports VIMODE="$(vi_mode_prompt_info)"
-  RPROMPT=$(_omp_get_prompt right)  # omp re-renders just the right block
-}
-vi_mode_before_redraw_functions+=(_vimode_omp_refresh)
+# oh-my-posh reads $VIMODE at render time; set_poshcontext is its own per-render
+# context hook, so just point it at the indicator and register omp's renderer.
+function set_poshcontext() { export VIMODE="$(vi_mode_prompt_info)" }
+vi_mode_before_redraw_functions+=(_omp_precmd)
 ```
 
-Re-render only the block that carries the indicator (here `right`) — it runs on
-every mode change, so avoid re-rendering an expensive left prompt (git status,
-etc.). This works whether or not oh-my-posh streaming is enabled; streaming only
-affects how the left/primary prompt is delivered.
+That's the whole integration: `_omp_precmd` re-renders omp (the same call omp
+runs each precmd), the plugin then issues `reset-prompt`. Note it re-renders the
+*entire* prompt each mode change, which also re-captures `$?` and execution time
+— so the exit-status and timing segments reset on a mode switch. If that bothers
+you, re-render only the block carrying the indicator instead, e.g.
+`RPROMPT=$(_omp_get_prompt right)` (oh-my-posh's own block renderer, which reuses
+omp's cached state so the status/timing segments stay put). Either way it runs on
+every mode change, so keep the render cheap. Works whether or not oh-my-posh
+streaming is enabled; streaming only affects how the left prompt is delivered.
 
 ## Cursor styles
 

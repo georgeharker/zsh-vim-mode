@@ -231,6 +231,73 @@ bindkey '^a' beginning-of-line
 bindkey '^e' end-of-line
 
 # ----------------------------------------------------------------------------
+# Emacs-style insert mode (opt-in)
+#
+# Set VI_MODE_EMACS_INSERT=true to make insert mode (viins) behave like the
+# standard emacs/readline "main" keymap: full editing keys while typing, and
+# ESC still drops you into vi normal mode (vicmd). Exactly: editing works like
+# main mode until you hit ESC.
+#
+# Bindings are ADDITIVE into viins (we never replace the keymap), so this stays
+# order-independent and any bindings you set later — fzf, your keybinds module,
+# etc. — still take precedence over these defaults. ESC-alone remains
+# vi-cmd-mode; the ESC-prefixed Alt keys coexist with it via $KEYTIMEOUT.
+# ----------------------------------------------------------------------------
+if [[ "${VI_MODE_EMACS_INSERT:-}" == true ]]; then
+  # Arrow keys. Both the normal (\e[X) and application-keypad (\eOX) forms are
+  # bound because this plugin emits `smkx`, which switches the terminal into
+  # application mode where arrows arrive as \eOA..\eOD.
+  bindkey -M viins '\e[C'    forward-char           # Right
+  bindkey -M viins '\eOC'    forward-char
+  bindkey -M viins '\e[D'    backward-char          # Left
+  bindkey -M viins '\eOD'    backward-char
+  bindkey -M viins '\e[A'    up-line-or-history     # Up
+  bindkey -M viins '\eOA'    up-line-or-history
+  bindkey -M viins '\e[B'    down-line-or-history   # Down
+  bindkey -M viins '\eOB'    down-line-or-history
+  # Home / End (normal, application, and tilde forms)
+  bindkey -M viins '\e[H'    beginning-of-line
+  bindkey -M viins '\eOH'    beginning-of-line
+  bindkey -M viins '\e[1~'   beginning-of-line
+  bindkey -M viins '\e[F'    end-of-line
+  bindkey -M viins '\eOF'    end-of-line
+  bindkey -M viins '\e[4~'   end-of-line
+  # Movement
+  bindkey -M viins '^A'      beginning-of-line
+  bindkey -M viins '^E'      end-of-line
+  bindkey -M viins '^F'      forward-char
+  bindkey -M viins '^B'      backward-char
+  bindkey -M viins '\ef'     forward-word           # Alt-f
+  bindkey -M viins '\eb'     backward-word          # Alt-b
+  bindkey -M viins '\eC'     forward-word           # Alt-Right (Ghostty/ESC-letter form)
+  bindkey -M viins '\eD'     backward-word          # Alt-Left
+  bindkey -M viins '\e[1;5C' forward-word           # Ctrl-Right
+  bindkey -M viins '\e[1;5D' backward-word          # Ctrl-Left
+  bindkey -M viins '\e[1;3C' forward-word           # Alt-Right (xterm-style)
+  bindkey -M viins '\e[1;3D' backward-word          # Alt-Left  (xterm-style)
+  # Editing
+  bindkey -M viins '^D'      delete-char
+  bindkey -M viins '^H'      backward-delete-char
+  bindkey -M viins '^?'      backward-delete-char
+  bindkey -M viins '\ed'     kill-word              # Alt-d
+  bindkey -M viins '\e^?'    backward-kill-word     # Alt-Backspace
+  bindkey -M viins '^W'      backward-kill-word
+  bindkey -M viins '^U'      backward-kill-line
+  bindkey -M viins '^K'      kill-line
+  bindkey -M viins '^Y'      yank
+  bindkey -M viins '^T'      transpose-chars
+  bindkey -M viins '\et'     transpose-words        # Alt-t
+  bindkey -M viins '^_'      undo
+  # History
+  bindkey -M viins '^P'      up-line-or-history
+  bindkey -M viins '^N'      down-line-or-history
+  bindkey -M viins '^R'      history-incremental-search-backward
+  bindkey -M viins '^S'      history-incremental-search-forward
+  # Misc
+  bindkey -M viins '^L'      clear-screen
+fi
+
+# ----------------------------------------------------------------------------
 # Clipboard integration
 # ----------------------------------------------------------------------------
 

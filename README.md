@@ -93,6 +93,30 @@ replaces it.
   insert mode. Support prompt-expansion sequences.
 - `VI_MODE_DISABLE_CLIPBOARD` — if set, disables clipboard integration on
   yank/paste.
+- `VI_MODE_EMACS_INSERT` — set to `true` to make **insert mode behave like the
+  normal (emacs/readline) keymap**: arrow keys, alt-word motion, `^A`/`^E`/`^K`/
+  `^U`, alt-backspace, history search, etc. `ESC` still drops into vi normal
+  mode. The bindings are added to `viins` additively (the keymap is never
+  replaced), so this is order-independent and your own later bindings still win.
+  See [Emacs-style insert mode](#emacs-style-insert-mode).
+
+## Emacs-style insert mode
+
+By default this is a normal vi-mode: insert mode has only a handful of
+conveniences and is otherwise spartan. If you'd rather *type* with the editing
+keys you already know and only reach for vi when you press `ESC`, set:
+
+```zsh
+VI_MODE_EMACS_INSERT=true
+```
+
+Insert mode (`viins`) then gets the standard readline/emacs set — `Left`/`Right`/
+`Up`/`Down` (including application-keypad `\eO…` forms, since this plugin emits
+`smkx`), `Alt-Left`/`Alt-Right` and `Alt-f`/`Alt-b` for word motion, `^A`/`^E`,
+`^F`/`^B`, `Alt-d`/`Alt-Backspace`/`^W` to kill words, `^K`/`^U`, `^Y`, `^T`/
+`Alt-t`, `^_` undo, `^R`/`^S` history search, `^L` clear. Normal mode (`vicmd`)
+is left as stock vi. Because the keys are bound additively, anything you bind
+afterwards (fzf, a keybinds module, …) overrides these.
 
 ## Showing the mode in your prompt
 

@@ -120,41 +120,51 @@ afterwards (fzf, a keybinds module, …) overrides these.
 
 ## Showing the mode in your prompt
 
-`vi_mode_prompt_info` emits the current mode indicator. If neither `$RPS1` nor
-`$RPROMPT` is set when the plugin loads, it defaults `RPS1` to show it. To place
-it yourself:
+The plugin core is prompt-agnostic: on every mode change it sets `VI_KEYMAP`,
+runs any `vi_mode_before_redraw_functions` (see below), and issues
+`zle reset-prompt; zle -R`. How the indicator reaches the screen depends on
+which kind of prompt you use.
+
+### Prompt-expansion prompts (oh-my-zsh themes, hand-rolled `$PROMPT`)
+
+These embed `$(vi_mode_prompt_info)` in `$PROMPT`/`$RPROMPT`, which zsh
+re-expands on every `reset-prompt`. **Nothing extra is needed** — the redraw
+the plugin already does updates the indicator. If neither `$RPS1` nor `$RPROMPT`
+is set when the plugin loads, it defaults `RPS1='$(vi_mode_prompt_info)'`. To
+place it yourself:
 
 ```zsh
 PROMPT="$PROMPT"'$(vi_mode_prompt_info)'
 RPROMPT='$(vi_mode_prompt_info)'"$RPROMPT"
 ```
 
-The single quotes are important: they defer evaluation so the indicator is
-recomputed on each redraw.
+The single quotes matter: they defer evaluation so it's recomputed each redraw.
 
-### Prompts that bake the mode in at render time (oh-my-posh, etc.)
+### Render-baked prompts (oh-my-posh, etc.)
 
-Some prompts don't re-expand a `$(vi_mode_prompt_info)` on every redraw — they
-render once per `precmd` into a static string. oh-my-posh is the common case:
-its vi indicator comes from a `$VIMODE` env var read by the `oh-my-posh` binary
-at render time, so a bare `zle reset-prompt` on a mode change shows the *old*
-mode until the next command.
+These render once per `precmd` into a static string, so `reset-prompt` alone
+redraws the *old* mode. oh-my-posh is the common case: its indicator comes from
+an env var (e.g. `$VIMODE`) that the `oh-my-posh` binary reads at render time.
 
-For those, append a function to `vi_mode_before_redraw_functions`. The plugin
-calls each entry, inside the ZLE widget, right before it redraws on a mode
-change — so you can recompute the state and re-render the affected block first:
+Append a function to `vi_mode_before_redraw_functions`. The plugin calls each
+entry — inside the ZLE widget, right before it redraws — so you can refresh the
+env var and let the prompt's **own** renderer rebuild the affected block:
 
 ```zsh
-# oh-my-posh: VIMODE lives in the rprompt block of the theme
+# oh-my-posh: VIMODE lives in the theme's rprompt block.
+# _omp_get_prompt is oh-my-posh's own renderer (it uses it internally), so this
+# anchors through omp rather than hand-building a prompt string.
 function _vimode_omp_refresh() {
-  export VIMODE="$(vi_mode_prompt_info)"   # or call oh-my-posh's set_poshcontext
-  RPROMPT=$(_omp_get_prompt right)         # re-render the block that shows it
+  set_poshcontext                   # exports VIMODE="$(vi_mode_prompt_info)"
+  RPROMPT=$(_omp_get_prompt right)  # omp re-renders just the right block
 }
 vi_mode_before_redraw_functions+=(_vimode_omp_refresh)
 ```
 
-This re-renders only the prompt block that carries the indicator. Note it runs
-on every mode change, so keep it to the cheapest render that updates the mode.
+Re-render only the block that carries the indicator (here `right`) — it runs on
+every mode change, so avoid re-rendering an expensive left prompt (git status,
+etc.). This works whether or not oh-my-posh streaming is enabled; streaming only
+affects how the left/primary prompt is delivered.
 
 ## Cursor styles
 

@@ -27,22 +27,27 @@ prompt indicator and cursor always reflect the current mode.
 > etc.) in `precmd` and storing them in a variable, the redraw is cheap. It is
 > only costly if you embed `$(slow-command)` directly inside `$PROMPT`.
 
-### 2. Hooks compose instead of clobbering
+### 2. Order-independent; no fighting over contested widgets
 
-Upstream installed its ZLE hooks with raw `zle -N zle-keymap-select`
-(and `zle-line-init` / `zle-line-finish`). Those widget names are shared with
-zsh-autosuggestions, zsh-syntax-highlighting, powerlevel10k, and others —
-whoever loads **last** wins, and the others' hooks silently stop firing
-(including, often, the redraw you wanted).
-
-This plugin registers via `add-zle-hook-widget` (with a fallback to raw
-`zle -N` on zsh < 5.3). Multiple plugins' hooks coexist. It even absorbs a
-pre-existing raw widget from an older plugin and runs both:
+Upstream installed its ZLE hooks with raw `zle -N zle-keymap-select`,
+`zle-line-init`, and `zle-line-finish`. Those last two are heavily contested:
+**oh-my-posh** decorates `zle-line-init` (it runs `.recursive-edit` there),
+and **zsh-autosuggestions** / **fast-syntax-highlighting** wrap it as well.
+When several wrapping schemes meet on `zle-line-init` in the wrong order, the
+wrappers chain into each other and zsh aborts with:
 
 ```
-$ add-zle-hook-widget -L
-zstyle zle-keymap-select widgets 0:user:other-plugin-keymap-select 1:vi-mode-keymap-select
+_omp_decorated_zle-line-init: maximum nested function level reached; increase FUNCNEST?
 ```
+
+This plugin sidesteps that entirely. The only zle widget it hooks is
+`keymap-select` — the actual mode-change event that drives the redraw — via
+`add-zle-hook-widget` (nothing else wraps that widget). Everything omz did in
+the `zle-line-init` / `zle-line-finish` *widgets* (reset to insert mode, cursor
+shape, keypad mode) is instead done in `precmd` / `preexec`, registered with
+`add-zsh-hook`. Those are plain hook arrays with no wrap/absorb semantics, so
+the plugin composes with everything and **does not depend on load order** — it
+works correctly whether it loads before or after oh-my-posh and the rest.
 
 ### 3. Smarter (optional) auto-detection
 
@@ -60,8 +65,8 @@ git clone <this-repo> ~/.zsh/zsh-vim-mode
 echo 'source ~/.zsh/zsh-vim-mode/zsh-vim-mode.plugin.zsh' >> ~/.zshrc
 ```
 
-Source it **after** other plugins that touch `zle-keymap-select` /
-`zle-line-init` / `zle-line-finish` so it can absorb their widgets.
+Load order does not matter — source it before or after oh-my-posh,
+zsh-autosuggestions, fast-syntax-highlighting, etc.
 
 ### oh-my-zsh
 

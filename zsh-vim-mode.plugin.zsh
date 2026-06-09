@@ -5,10 +5,13 @@
 #
 # Key differences from upstream omz vi-mode:
 #   * Mode changes redraw the prompt by default (VI_MODE_RESET_PROMPT_ON_MODE_CHANGE=true).
-#   * ZLE hooks are installed via `add-zle-hook-widget` so this plugin composes
-#     with other plugins (zsh-autosuggestions, zsh-syntax-highlighting, p10k, ...)
-#     instead of clobbering their `zle-keymap-select` / `zle-line-init` /
-#     `zle-line-finish` widgets.
+#   * Order-independent and conflict-free with prompt/editing plugins. The only
+#     zle widget we hook is `keymap-select` (the mode-change event), via
+#     `add-zle-hook-widget`. The per-line housekeeping omz did in the
+#     `zle-line-init` / `zle-line-finish` widgets is done in `precmd` / `preexec`
+#     instead, so we never tangle with oh-my-posh / zsh-autosuggestions /
+#     fast-syntax-highlighting on those contested widgets (see the long note by
+#     the hook installation below).
 #   * Prompt auto-detection (the `auto` mode) matches the loose substring
 #     `vi_mode_prompt_info`, so it still fires when a theme calls the function
 #     without the exact `$(vi_mode_prompt_info)` wrapper omz looked for.
@@ -138,42 +141,65 @@ function _visual-mode {
 }
 zle -N visual-mode _visual-mode
 
-# Each new command line starts in insert mode. Redraw if we are arriving from a
-# different mode so the indicator/cursor reflect the reset.
-function vi-mode-line-init() {
-  local prev_vi_keymap="${VI_KEYMAP:-}"
+# Per-line housekeeping runs in precmd/preexec rather than in the
+# zle-line-init / zle-line-finish *widgets*, ON PURPOSE.
+#
+# zle-line-init is a contested widget: oh-my-posh decorates it (it runs
+# `.recursive-edit` there), and zsh-autosuggestions / fast-syntax-highlighting
+# wrap it too. add-zle-hook-widget "absorbs" any pre-existing widget into its
+# hook list, so when these wrapping schemes meet on zle-line-init in the wrong
+# combination the wrappers chain into each other and blow up with "maximum
+# nested function level reached". The trigger is load order, which we refuse to
+# depend on.
+#
+# precmd/preexec carry no such baggage: add-zsh-hook simply appends to an array,
+# composes with every other consumer, and is completely order-independent. None
+# of the work we do here (reset to insert mode, cursor shape, keypad mode) needs
+# to live on the line-init widget — at precmd time the prompt is rendered fresh,
+# so the indicator is already correct without a redraw.
+
+# Runs before each prompt: every new command line starts in insert mode.
+function vi-mode-precmd() {
   typeset -g VI_KEYMAP=main
-
-  [[ "$prev_vi_keymap" != 'main' ]] && _vi-mode-should-reset-prompt && _vi-mode-reset-prompt
-
-  # These `echoti` statements were originally set in lib/key-bindings.zsh.
+  # Application keypad mode for line editing (was lib/key-bindings.zsh).
   (( ! ${+terminfo[smkx]} )) || echoti smkx
   _vi-mode-set-cursor-shape-for-keymap "${VI_KEYMAP}"
 }
 
-# When a line is accepted, return to a neutral mode/cursor.
-function vi-mode-line-finish() {
+# Runs before a command executes: return to a neutral keymap/cursor.
+function vi-mode-preexec() {
   typeset -g VI_KEYMAP=main
   (( ! ${+terminfo[rmkx]} )) || echoti rmkx
   _vi-mode-set-cursor-shape-for-keymap default
 }
 
-# Install the hooks. Prefer add-zle-hook-widget for composability.
-# `autoload -Uz +X` forces the function body to load now and fails if the
-# function file isn't in $fpath (zsh < 5.3), letting us fall back cleanly.
-if autoload -Uz +X add-zle-hook-widget 2>/dev/null; then
-  add-zle-hook-widget keymap-select vi-mode-keymap-select
-  add-zle-hook-widget line-init     vi-mode-line-init
-  add-zle-hook-widget line-finish   vi-mode-line-finish
-else
-  # Fallback for zsh < 5.3: define the widgets directly. This clobbers any
-  # existing widgets of the same name, matching omz's original behavior.
-  function zle-keymap-select() { vi-mode-keymap-select "$@" }
-  function zle-line-init()      { vi-mode-line-init "$@" }
-  function zle-line-finish()    { vi-mode-line-finish "$@" }
-  zle -N zle-keymap-select
-  zle -N zle-line-init
-  zle -N zle-line-finish
+# Install the hooks. Guarded to run at most once per shell so that re-sourcing
+# (e.g. reloading ~/.zshrc while testing) can't double-register anything.
+if (( ! ${+_VI_MODE_HOOKS_INSTALLED} )); then
+  typeset -g _VI_MODE_HOOKS_INSTALLED=1
+
+  # precmd/preexec: always via add-zsh-hook (order-independent, never wrapped).
+  autoload -Uz add-zsh-hook
+  add-zsh-hook precmd  vi-mode-precmd
+  add-zsh-hook preexec vi-mode-preexec
+
+  # keymap-select is the only thing that genuinely needs a zle widget (it's the
+  # mode-change event that drives the prompt redraw). Nothing else wraps it, so
+  # add-zle-hook-widget composes here without the absorb hazard above.
+  #
+  # Don't use `autoload +X` blindly to probe for it: that errors if the function
+  # is already defined (another plugin loaded it), which would wrongly send us to
+  # the clobbering fallback.
+  (( ${+functions[add-zle-hook-widget]} )) || \
+    autoload -Uz +X add-zle-hook-widget 2>/dev/null
+
+  if (( ${+functions[add-zle-hook-widget]} )); then
+    add-zle-hook-widget keymap-select vi-mode-keymap-select
+  else
+    # Fallback for zsh < 5.3: define the widget directly.
+    function zle-keymap-select() { vi-mode-keymap-select "$@" }
+    zle -N zle-keymap-select
+  fi
 fi
 
 # ----------------------------------------------------------------------------

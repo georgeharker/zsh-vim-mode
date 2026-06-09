@@ -89,8 +89,9 @@ replaces it.
   (default: unset).
 - `VI_MODE_CURSOR_NORMAL` / `_VISUAL` / `_INSERT` / `_OPPEND` — cursor shapes
   (see [Cursor styles](#cursor-styles)).
-- `MODE_INDICATOR` / `INSERT_MODE_INDICATOR` — the strings shown in normal /
-  insert mode. Support prompt-expansion sequences.
+- `VI_MODE_INDICATOR_NORMAL` / `_INSERT` / `_VISUAL` / `_VLINE` / `_OPPEND` —
+  the per-mode strings emitted by `vi_mode_prompt_info`. See
+  [Mode indicators](#mode-indicators).
 - `VI_MODE_DISABLE_CLIPBOARD` — if set, disables clipboard integration on
   yank/paste.
 - `VI_MODE_EMACS_INSERT` — set to `true` to make **insert mode behave like the
@@ -117,6 +118,31 @@ Insert mode (`viins`) then gets the standard readline/emacs set — `Left`/`Righ
 `Alt-t`, `^_` undo, `^R`/`^S` history search, `^L` clear. Normal mode (`vicmd`)
 is left as stock vi. Because the keys are bound additively, anything you bind
 afterwards (fzf, a keybinds module, …) overrides these.
+
+## Mode indicators
+
+`vi_mode_prompt_info` emits a string for the current mode, chosen from these
+variables (defaults shown):
+
+```zsh
+VI_MODE_INDICATOR_NORMAL='[Normal]'   # vicmd
+VI_MODE_INDICATOR_INSERT='[Ins]'      # main / viins
+VI_MODE_INDICATOR_VISUAL='[Visual]'   # charwise visual
+VI_MODE_INDICATOR_VLINE='[V-Line]'    # linewise visual
+VI_MODE_INDICATOR_OPPEND="$VI_MODE_INDICATOR_NORMAL"  # operator-pending (d, c, …)
+```
+
+Set any of them to customise the label, including `''` to show nothing for that
+mode (e.g. `VI_MODE_INDICATOR_INSERT=''` for a blank insert indicator). Values
+go through prompt expansion when used in a zsh `$PROMPT`/`$RPROMPT`, so
+`%F{…}`/`%B` sequences work there; for oh-my-posh, use plain text or omp markup
+since the value is rendered by the omp binary.
+
+The legacy oh-my-zsh names `MODE_INDICATOR` and `INSERT_MODE_INDICATOR` still
+work: if set before the plugin loads they seed the normal and insert indicators.
+
+> Replace mode (`R`) currently reports as insert — it isn't a distinct keymap,
+> so the prompt can't tell it apart without wrapping the `vi-replace` widget.
 
 ## Showing the mode in your prompt
 

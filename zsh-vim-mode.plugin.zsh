@@ -154,10 +154,14 @@ function vi-mode-keymap-select() {
   _vi-mode-set-cursor-shape-for-keymap "${VI_KEYMAP}"
 }
 
-# `visual-mode` does not emit a `zle-keymap-select` event on its own, so wrap it
-# to keep VI_KEYMAP, the cursor, and the prompt in sync.
+# `visual-mode` / `visual-line-mode` don't emit a `zle-keymap-select` event on
+# their own, so wrap them to keep VI_KEYMAP, the visual-vs-visual-line
+# distinction (VI_VISUAL_LINE), the cursor, and the prompt in sync. The flag is
+# set before calling the real widget so a redraw triggered from here sees it.
+typeset -g VI_VISUAL_LINE=0
+
 function _visual-mode {
-  typeset -g VI_KEYMAP=visual
+  typeset -g VI_KEYMAP=visual VI_VISUAL_LINE=0
   zle .visual-mode
   if _vi-mode-should-reset-prompt; then
     _vi-mode-reset-prompt
@@ -165,6 +169,16 @@ function _visual-mode {
   _vi-mode-set-cursor-shape-for-keymap "$VI_KEYMAP"
 }
 zle -N visual-mode _visual-mode
+
+function _visual-line-mode {
+  typeset -g VI_KEYMAP=visual VI_VISUAL_LINE=1
+  zle .visual-line-mode
+  if _vi-mode-should-reset-prompt; then
+    _vi-mode-reset-prompt
+  fi
+  _vi-mode-set-cursor-shape-for-keymap "$VI_KEYMAP"
+}
+zle -N visual-line-mode _visual-line-mode
 
 # Per-line housekeeping runs in precmd/preexec rather than in the
 # zle-line-init / zle-line-finish *widgets*, ON PURPOSE.
@@ -373,11 +387,35 @@ fi
 # Prompt mode indicator
 # ----------------------------------------------------------------------------
 
-# if mode indicator wasn't setup by theme, define default, we'll leave INSERT_MODE_INDICATOR empty by default
-typeset -g MODE_INDICATOR=${MODE_INDICATOR:='%B%F{red}<%b<<%f'}
+# Per-mode prompt indicators used by vi_mode_prompt_info. Customise any of them;
+# set any to '' to show nothing for that mode (e.g. a blank insert indicator).
+# Assigned with `=` (not `:=`) so an explicit empty value is preserved.
+#
+# The legacy omz names MODE_INDICATOR / INSERT_MODE_INDICATOR still work — if set
+# before the plugin loads they seed the normal / insert indicators.
+typeset -g VI_MODE_INDICATOR_NORMAL=${VI_MODE_INDICATOR_NORMAL=${MODE_INDICATOR-'[Normal]'}}
+typeset -g VI_MODE_INDICATOR_INSERT=${VI_MODE_INDICATOR_INSERT=${INSERT_MODE_INDICATOR-'[Ins]'}}
+typeset -g VI_MODE_INDICATOR_VISUAL=${VI_MODE_INDICATOR_VISUAL='[Visual]'}
+typeset -g VI_MODE_INDICATOR_VLINE=${VI_MODE_INDICATOR_VLINE='[V-Line]'}
+# Operator-pending (the `d` of `dw`) defaults to the normal indicator so it
+# doesn't flash a different value mid-operator; set it for a distinct marker.
+typeset -g VI_MODE_INDICATOR_OPPEND=${VI_MODE_INDICATOR_OPPEND=$VI_MODE_INDICATOR_NORMAL}
 
 function vi_mode_prompt_info() {
-  echo "${${VI_KEYMAP/vicmd/$MODE_INDICATOR}/(main|viins)/$INSERT_MODE_INDICATOR}"
+  local ind
+  case "${VI_KEYMAP}" in
+    vicmd)  ind=$VI_MODE_INDICATOR_NORMAL ;;
+    viopp)  ind=$VI_MODE_INDICATOR_OPPEND ;;
+    visual)
+      if [[ "${VI_VISUAL_LINE:-0}" == 1 ]]; then
+        ind=$VI_MODE_INDICATOR_VLINE
+      else
+        ind=$VI_MODE_INDICATOR_VISUAL
+      fi
+      ;;
+    *)      ind=$VI_MODE_INDICATOR_INSERT ;;
+  esac
+  print -rn -- "$ind"
 }
 
 # define right prompt, if it wasn't defined by a theme

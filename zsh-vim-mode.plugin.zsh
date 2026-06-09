@@ -1,355 +1,167 @@
 # zsh-vim-mode
 #
-# A fork of oh-my-zsh's `vi-mode` plugin, focused on making prompt redraws on
-# mode changes reliable and well-behaved.
+# A fork of oh-my-zsh's `vi-mode` plugin, focused on reliable prompt redraws on
+# mode change, order-independence, and clean configuration.
 #
-# Key differences from upstream omz vi-mode:
-#   * Mode changes redraw the prompt by default (VI_MODE_RESET_PROMPT_ON_MODE_CHANGE=true).
-#   * Order-independent and conflict-free with prompt/editing plugins. The only
-#     zle widget we hook is `keymap-select` (the mode-change event), via
-#     `add-zle-hook-widget`. The per-line housekeeping omz did in the
-#     `zle-line-init` / `zle-line-finish` widgets is done in `precmd` / `preexec`
-#     instead, so we never tangle with oh-my-posh / zsh-autosuggestions /
-#     fast-syntax-highlighting on those contested widgets (see the long note by
-#     the hook installation below).
-#   * Prompt auto-detection (the `auto` mode) matches the loose substring
-#     `vi_mode_prompt_info`, so it still fires when a theme calls the function
-#     without the exact `$(vi_mode_prompt_info)` wrapper omz looked for.
+# All configuration is via zstyle under the ':zsh-vim-mode:*' context — set
+# these BEFORE sourcing the plugin:
 #
-# All public variable and function names from omz vi-mode are preserved, so this
-# is a drop-in replacement.
+#   # global
+#   zstyle ':zsh-vim-mode:'  set-cursor      yes        # change cursor per mode (default: no)
+#   zstyle ':zsh-vim-mode:'  redraw          always     # always | auto | never  (default: always)
+#   zstyle ':zsh-vim-mode:'  insert-keymap   emacs      # emacs | viins          (default: viins)
+#   zstyle ':zsh-vim-mode:'  clipboard       yes        # yank/paste to clipboard (default: yes)
+#   zstyle ':zsh-vim-mode:'  redraw-hooks    _my_fn     # fns run before each mode-change redraw
+#
+#   # per mode (normal | insert | visual | visual-line | op)
+#   zstyle ':zsh-vim-mode:normal'  indicator '[Normal]'
+#   zstyle ':zsh-vim-mode:insert'  indicator ''         # blank
+#   zstyle ':zsh-vim-mode:normal'  cursor    block      # block|line|underline|bar|blink-* | 0-6
+#
+# Public API: `vi_mode_prompt_info` (emits the current mode's indicator) and the
+# `VI_KEYMAP` / `VI_VISUAL_LINE` state it reads.
 
 # ----------------------------------------------------------------------------
-# Configuration
+# Defaults
 # ----------------------------------------------------------------------------
 
-# Control whether to redraw the prompt on each mode change.
-#
-# Resetting the prompt on every mode change re-expands $PROMPT/$RPROMPT. This is
-# cheap for prompts that compute expensive bits (git status, etc.) in `precmd`
-# and store them in a variable, because `reset-prompt` does NOT re-run `precmd`.
-# It can be costly only if you embed `$(slow-command)` substitutions directly in
-# $PROMPT.
-#
-# Accepted values:
-#   true   - always redraw on mode change (default)
-#   auto   - redraw only if the prompt actually displays the vi-mode indicator
-#   false  - never redraw (or any other value)
-typeset -g VI_MODE_RESET_PROMPT_ON_MODE_CHANGE=${VI_MODE_RESET_PROMPT_ON_MODE_CHANGE:=true}
+typeset -gA _zsh_vim_mode_indicator_default=(
+  normal      '[Normal]'
+  insert      '[Ins]'
+  visual      '[Visual]'
+  visual-line '[V-Line]'
+  op          '[Normal]'
+)
 
-# Control whether to change the cursor style on mode change.
-#
-# Set to "true" to change the cursor on each mode change.
-# Unset or set to any other value to do the opposite.
-typeset -g VI_MODE_SET_CURSOR
+# Per-mode default cursor (symbolic; mapped to DECSCUSR below).
+typeset -gA _zsh_vim_mode_cursor_default=(
+  normal block  insert line  visual line  visual-line line  op block
+)
 
-# Control how the cursor appears in the various vim modes. This only applies
-# if $VI_MODE_SET_CURSOR=true.
-#
-# See https://vt100.net/docs/vt510-rm/DECSCUSR for cursor styles
-typeset -g VI_MODE_CURSOR_NORMAL=${VI_MODE_CURSOR_NORMAL:=2}
-typeset -g VI_MODE_CURSOR_VISUAL=${VI_MODE_CURSOR_VISUAL:=6}
-typeset -g VI_MODE_CURSOR_INSERT=${VI_MODE_CURSOR_INSERT:=6}
-# Operator-pending (e.g. the `d` of `dw`). Defaults to the normal-mode shape
-# rather than omz's `0` (terminal default): ZLE does not reliably fire
-# `zle-keymap-select` on the viopp -> vicmd return, so a distinct oppend shape
-# tends to get "stuck" after an operator. Keeping it the same as normal means
-# the cursor simply stays a block throughout. Override if you really want a
-# distinct operator-pending cursor.
-typeset -g VI_MODE_CURSOR_OPPEND=${VI_MODE_CURSOR_OPPEND:=$VI_MODE_CURSOR_NORMAL}
+# Friendly cursor names -> DECSCUSR codes. See
+# https://vt100.net/docs/vt510-rm/DECSCUSR
+typeset -gA _zsh_vim_mode_cursor_code=(
+  default 0  blink-block 1  block 2  blink-underline 3
+  underline 4  blink-line 5  blink-bar 5  line 6  bar 6
+)
 
 typeset -g VI_KEYMAP=${VI_KEYMAP:=main}
+typeset -g VI_VISUAL_LINE=${VI_VISUAL_LINE:=0}
+
+# ----------------------------------------------------------------------------
+# Mode resolution
+# ----------------------------------------------------------------------------
+
+# Resolve the symbolic mode name from the cached keymap state into $REPLY,
+# avoiding a subshell.
+_zsh_vim_mode_name() {
+  case "${VI_KEYMAP:-main}" in
+    vicmd)  REPLY=normal ;;
+    viopp)  REPLY=op ;;
+    visual) [[ "${VI_VISUAL_LINE:-0}" == 1 ]] && REPLY=visual-line || REPLY=visual ;;
+    *)      REPLY=insert ;;
+  esac
+}
 
 # ----------------------------------------------------------------------------
 # Cursor shape
 # ----------------------------------------------------------------------------
 
-function _vi-mode-set-cursor-shape-for-keymap() {
-  [[ "$VI_MODE_SET_CURSOR" = true ]] || return
+_zsh_vim_mode_set_cursor() {
+  zstyle -t ':zsh-vim-mode:' set-cursor || return
+  local REPLY; _zsh_vim_mode_name
+  local shape
+  zstyle -s ":zsh-vim-mode:$REPLY" cursor shape || shape=$_zsh_vim_mode_cursor_default[$REPLY]
+  printf '\e[%d q' "${_zsh_vim_mode_cursor_code[$shape]:-$shape}"
+}
 
-  # https://vt100.net/docs/vt510-rm/DECSCUSR
-  local _shape=0
-  case "${1:-${VI_KEYMAP:-main}}" in
-    main)    _shape=$VI_MODE_CURSOR_INSERT ;; # vi insert: line
-    viins)   _shape=$VI_MODE_CURSOR_INSERT ;; # vi insert: line
-    isearch) _shape=$VI_MODE_CURSOR_INSERT ;; # inc search: line
-    command) _shape=$VI_MODE_CURSOR_INSERT ;; # read a command name
-    vicmd)   _shape=$VI_MODE_CURSOR_NORMAL ;; # vi cmd: block
-    visual)  _shape=$VI_MODE_CURSOR_VISUAL ;; # vi visual mode: block
-    viopp)   _shape=$VI_MODE_CURSOR_OPPEND ;; # vi operation pending: blinking block
-    *)       _shape=0 ;;
-  esac
-  printf $'\e[%d q' "${_shape}"
+# Cursor used while a command runs (between preexec and the next prompt).
+_zsh_vim_mode_reset_cursor() {
+  zstyle -t ':zsh-vim-mode:' set-cursor && printf '\e[0 q'
 }
 
 # ----------------------------------------------------------------------------
 # Prompt redraw
 # ----------------------------------------------------------------------------
 
-# Decide whether a mode change should redraw the prompt.
-function _vi-mode-should-reset-prompt() {
-  case "${VI_MODE_RESET_PROMPT_ON_MODE_CHANGE:-true}" in
-    true)
-      return 0
-      ;;
-    auto)
-      # Redraw only if the prompt actually shows the mode indicator. Match the
-      # loose substring `vi_mode_prompt_info` rather than the exact
-      # `$(vi_mode_prompt_info)` omz required, so it works regardless of how the
-      # function is invoked. (PROMPT/RPROMPT are aliases of PS1/RPS1; listing all
-      # four is just belt-and-suspenders.)
-      [[ "${PROMPT} ${RPROMPT} ${PS1} ${RPS1}" == *'vi_mode_prompt_info'* ]]
-      return $?
-      ;;
-    *)
-      return 1
-      ;;
+_zsh_vim_mode_should_redraw() {
+  local mode
+  zstyle -s ':zsh-vim-mode:' redraw mode || mode=always
+  case "$mode" in
+    always) return 0 ;;
+    auto)   [[ "${PROMPT} ${RPROMPT} ${PS1} ${RPS1}" == *'vi_mode_prompt_info'* ]] ;;
+    *)      return 1 ;;
   esac
 }
 
-# Functions listed here are called (in order), inside the ZLE widget, right
-# before each mode-change prompt redraw. Use this to refresh prompt state that
-# is baked in at render time and therefore wouldn't update on a bare
-# `reset-prompt`. The canonical case is oh-my-posh: its vi indicator comes from
-# the $VIMODE env var, which is only recomputed in precmd, so a redraw alone
-# shows a stale mode. An integration registers a function that recomputes the
-# env var and re-renders the affected prompt. For example:
-#
-#   function _my_omp_vimode() {
-#     set_poshcontext                     # export VIMODE="$(vi_mode_prompt_info)"
-#     RPROMPT=$(_omp_get_prompt right)    # re-render the block that shows it
-#   }
-#   vi_mode_before_redraw_functions+=(_my_omp_vimode)
-typeset -ga vi_mode_before_redraw_functions
-
-# Redraw the command line / prompt immediately. Safe to call from any ZLE
-# widget; a no-op outside ZLE.
-function _vi-mode-reset-prompt() {
-  # ${WIDGET} is only set while a ZLE widget is executing.
+# Redraw the prompt immediately. Runs any registered redraw-hooks first (a seam
+# for render-baked prompts like oh-my-posh — see README). A no-op outside ZLE.
+_zsh_vim_mode_redraw() {
   [[ -n "${WIDGET:-}" ]] || return
-  local _fn
-  for _fn in "${vi_mode_before_redraw_functions[@]}"; do
-    (( ${+functions[$_fn]} )) && "$_fn"
-  done
+  local -a hooks; local f
+  zstyle -a ':zsh-vim-mode:' redraw-hooks hooks
+  for f in $hooks; do (( ${+functions[$f]} )) && "$f"; done
   zle reset-prompt
   zle -R
 }
 
 # ----------------------------------------------------------------------------
-# ZLE hook widgets
+# ZLE / shell hooks
 #
-# Installed via `add-zle-hook-widget` (falling back to raw `zle -N` on
-# zsh < 5.3) so we cooperate with other plugins instead of overwriting their
-# widgets.
+# Only `keymap-select` is hooked as a zle widget (the mode-change event). The
+# per-line housekeeping lives in precmd/preexec so we never tangle with the
+# contested zle-line-init / zle-line-finish widgets (oh-my-posh, autosuggestions,
+# fast-syntax-highlighting). This keeps the plugin order-independent.
 # ----------------------------------------------------------------------------
 
-# Fires whenever the active keymap changes, i.e. on every mode switch.
-function vi-mode-keymap-select() {
-  # Update the keymap variable used by the prompt.
+_zsh_vim_mode_keymap_select() {
   typeset -g VI_KEYMAP=$KEYMAP
-
-  if _vi-mode-should-reset-prompt; then
-    _vi-mode-reset-prompt
-  fi
-  _vi-mode-set-cursor-shape-for-keymap "${VI_KEYMAP}"
+  _zsh_vim_mode_should_redraw && _zsh_vim_mode_redraw
+  _zsh_vim_mode_set_cursor
 }
 
-# `visual-mode` / `visual-line-mode` don't emit a `zle-keymap-select` event on
-# their own, so wrap them to keep VI_KEYMAP, the visual-vs-visual-line
-# distinction (VI_VISUAL_LINE), the cursor, and the prompt in sync. The flag is
-# set before calling the real widget so a redraw triggered from here sees it.
-typeset -g VI_VISUAL_LINE=0
-
-function _visual-mode {
+# `visual-mode` / `visual-line-mode` don't emit a keymap-select event on their
+# own; wrap them to track the charwise/linewise distinction (VI_VISUAL_LINE) and
+# keep the cursor/prompt in sync. The flag is set before the real widget so a
+# redraw triggered from here sees it.
+_zsh_vim_mode_visual() {
   typeset -g VI_KEYMAP=visual VI_VISUAL_LINE=0
   zle .visual-mode
-  if _vi-mode-should-reset-prompt; then
-    _vi-mode-reset-prompt
-  fi
-  _vi-mode-set-cursor-shape-for-keymap "$VI_KEYMAP"
+  _zsh_vim_mode_should_redraw && _zsh_vim_mode_redraw
+  _zsh_vim_mode_set_cursor
 }
-zle -N visual-mode _visual-mode
 
-function _visual-line-mode {
+_zsh_vim_mode_visual_line() {
   typeset -g VI_KEYMAP=visual VI_VISUAL_LINE=1
   zle .visual-line-mode
-  if _vi-mode-should-reset-prompt; then
-    _vi-mode-reset-prompt
-  fi
-  _vi-mode-set-cursor-shape-for-keymap "$VI_KEYMAP"
+  _zsh_vim_mode_should_redraw && _zsh_vim_mode_redraw
+  _zsh_vim_mode_set_cursor
 }
-zle -N visual-line-mode _visual-line-mode
 
-# Per-line housekeeping runs in precmd/preexec rather than in the
-# zle-line-init / zle-line-finish *widgets*, ON PURPOSE.
-#
-# zle-line-init is a contested widget: oh-my-posh decorates it (it runs
-# `.recursive-edit` there), and zsh-autosuggestions / fast-syntax-highlighting
-# wrap it too. add-zle-hook-widget "absorbs" any pre-existing widget into its
-# hook list, so when these wrapping schemes meet on zle-line-init in the wrong
-# combination the wrappers chain into each other and blow up with "maximum
-# nested function level reached". The trigger is load order, which we refuse to
-# depend on.
-#
-# precmd/preexec carry no such baggage: add-zsh-hook simply appends to an array,
-# composes with every other consumer, and is completely order-independent. None
-# of the work we do here (reset to insert mode, cursor shape, keypad mode) needs
-# to live on the line-init widget — at precmd time the prompt is rendered fresh,
-# so the indicator is already correct without a redraw.
-
-# Runs before each prompt: every new command line starts in insert mode.
-function vi-mode-precmd() {
-  typeset -g VI_KEYMAP=main
-  # Application keypad mode for line editing (was lib/key-bindings.zsh).
+# Each new command line starts in insert mode.
+_zsh_vim_mode_precmd() {
+  typeset -g VI_KEYMAP=main VI_VISUAL_LINE=0
   (( ! ${+terminfo[smkx]} )) || echoti smkx
-  _vi-mode-set-cursor-shape-for-keymap "${VI_KEYMAP}"
+  _zsh_vim_mode_set_cursor
 }
 
-# Runs before a command executes: return to a neutral keymap/cursor.
-function vi-mode-preexec() {
-  typeset -g VI_KEYMAP=main
+# Before a command runs, return to a neutral keymap/cursor.
+_zsh_vim_mode_preexec() {
+  typeset -g VI_KEYMAP=main VI_VISUAL_LINE=0
   (( ! ${+terminfo[rmkx]} )) || echoti rmkx
-  _vi-mode-set-cursor-shape-for-keymap default
+  _zsh_vim_mode_reset_cursor
 }
 
-# Install the hooks. Guarded to run at most once per shell so that re-sourcing
-# (e.g. reloading ~/.zshrc while testing) can't double-register anything.
-if (( ! ${+_VI_MODE_HOOKS_INSTALLED} )); then
-  typeset -g _VI_MODE_HOOKS_INSTALLED=1
-
-  # precmd/preexec: always via add-zsh-hook (order-independent, never wrapped).
-  autoload -Uz add-zsh-hook
-  add-zsh-hook precmd  vi-mode-precmd
-  add-zsh-hook preexec vi-mode-preexec
-
-  # keymap-select is the only thing that genuinely needs a zle widget (it's the
-  # mode-change event that drives the prompt redraw). Nothing else wraps it, so
-  # add-zle-hook-widget composes here without the absorb hazard above.
-  #
-  # Don't use `autoload +X` blindly to probe for it: that errors if the function
-  # is already defined (another plugin loaded it), which would wrongly send us to
-  # the clobbering fallback.
-  (( ${+functions[add-zle-hook-widget]} )) || \
-    autoload -Uz +X add-zle-hook-widget 2>/dev/null
-
-  if (( ${+functions[add-zle-hook-widget]} )); then
-    add-zle-hook-widget keymap-select vi-mode-keymap-select
-  else
-    # Fallback for zsh < 5.3: define the widget directly.
-    function zle-keymap-select() { vi-mode-keymap-select "$@" }
-    zle -N zle-keymap-select
-  fi
-fi
-
 # ----------------------------------------------------------------------------
-# Key bindings
+# Clipboard integration (wraps the vi yank/change/delete/put widgets)
 # ----------------------------------------------------------------------------
 
-bindkey -v
-
-# allow vv to edit the command line (standard behaviour)
-autoload -Uz edit-command-line
-zle -N edit-command-line
-bindkey -M vicmd 'vv' edit-command-line
-
-# allow ctrl-p, ctrl-n for navigate history (standard behaviour)
-bindkey '^P' up-history
-bindkey '^N' down-history
-
-# allow ctrl-h, ctrl-w, ctrl-? for char and word deletion (standard behaviour)
-bindkey '^?' backward-delete-char
-bindkey '^h' backward-delete-char
-bindkey '^w' backward-kill-word
-
-# allow ctrl-r and ctrl-s to search the history
-bindkey '^r' history-incremental-search-backward
-bindkey '^s' history-incremental-search-forward
-
-# allow ctrl-a and ctrl-e to move to beginning/end of line
-bindkey '^a' beginning-of-line
-bindkey '^e' end-of-line
-
-# ----------------------------------------------------------------------------
-# Emacs-style insert mode (opt-in)
-#
-# Set VI_MODE_EMACS_INSERT=true to make insert mode (viins) behave like the
-# standard emacs/readline "main" keymap: full editing keys while typing, and
-# ESC still drops you into vi normal mode (vicmd). Exactly: editing works like
-# main mode until you hit ESC.
-#
-# Bindings are ADDITIVE into viins (we never replace the keymap), so this stays
-# order-independent and any bindings you set later — fzf, your keybinds module,
-# etc. — still take precedence over these defaults. ESC-alone remains
-# vi-cmd-mode; the ESC-prefixed Alt keys coexist with it via $KEYTIMEOUT.
-# ----------------------------------------------------------------------------
-if [[ "${VI_MODE_EMACS_INSERT:-}" == true ]]; then
-  # Arrow keys. Both the normal (\e[X) and application-keypad (\eOX) forms are
-  # bound because this plugin emits `smkx`, which switches the terminal into
-  # application mode where arrows arrive as \eOA..\eOD.
-  bindkey -M viins '\e[C'    forward-char           # Right
-  bindkey -M viins '\eOC'    forward-char
-  bindkey -M viins '\e[D'    backward-char          # Left
-  bindkey -M viins '\eOD'    backward-char
-  bindkey -M viins '\e[A'    up-line-or-history     # Up
-  bindkey -M viins '\eOA'    up-line-or-history
-  bindkey -M viins '\e[B'    down-line-or-history   # Down
-  bindkey -M viins '\eOB'    down-line-or-history
-  # Home / End (normal, application, and tilde forms)
-  bindkey -M viins '\e[H'    beginning-of-line
-  bindkey -M viins '\eOH'    beginning-of-line
-  bindkey -M viins '\e[1~'   beginning-of-line
-  bindkey -M viins '\e[F'    end-of-line
-  bindkey -M viins '\eOF'    end-of-line
-  bindkey -M viins '\e[4~'   end-of-line
-  # Movement
-  bindkey -M viins '^A'      beginning-of-line
-  bindkey -M viins '^E'      end-of-line
-  bindkey -M viins '^F'      forward-char
-  bindkey -M viins '^B'      backward-char
-  bindkey -M viins '\ef'     forward-word           # Alt-f
-  bindkey -M viins '\eb'     backward-word          # Alt-b
-  bindkey -M viins '\eC'     forward-word           # Alt-Right (Ghostty/ESC-letter form)
-  bindkey -M viins '\eD'     backward-word          # Alt-Left
-  bindkey -M viins '\e[1;5C' forward-word           # Ctrl-Right
-  bindkey -M viins '\e[1;5D' backward-word          # Ctrl-Left
-  bindkey -M viins '\e[1;3C' forward-word           # Alt-Right (xterm-style)
-  bindkey -M viins '\e[1;3D' backward-word          # Alt-Left  (xterm-style)
-  # Editing
-  bindkey -M viins '^D'      delete-char
-  bindkey -M viins '^H'      backward-delete-char
-  bindkey -M viins '^?'      backward-delete-char
-  bindkey -M viins '\ed'     kill-word              # Alt-d
-  bindkey -M viins '\e^?'    backward-kill-word     # Alt-Backspace
-  bindkey -M viins '^W'      backward-kill-word
-  bindkey -M viins '^U'      backward-kill-line
-  bindkey -M viins '^K'      kill-line
-  bindkey -M viins '^Y'      yank
-  bindkey -M viins '^T'      transpose-chars
-  bindkey -M viins '\et'     transpose-words        # Alt-t
-  bindkey -M viins '^_'      undo
-  # History
-  bindkey -M viins '^P'      up-line-or-history
-  bindkey -M viins '^N'      down-line-or-history
-  bindkey -M viins '^R'      history-incremental-search-backward
-  bindkey -M viins '^S'      history-incremental-search-forward
-  # Misc
-  bindkey -M viins '^L'      clear-screen
-fi
-
-# ----------------------------------------------------------------------------
-# Clipboard integration
-# ----------------------------------------------------------------------------
-
-function wrap_clipboard_widgets() {
-  # NB: Assume we are the first wrapper and that we only wrap native widgets
-  # See zsh-autosuggestions.zsh for a more generic and more robust wrapper
-  local verb="$1"
-  shift
-
-  local widget
-  local wrapped_name
+_zsh_vim_mode_clipboard_wrap() {
+  # NB: assumes we are the first wrapper and only wrap native widgets.
+  local verb="$1"; shift
+  local widget wrapped_name
   for widget in "$@"; do
-    wrapped_name="_zsh-vi-${verb}-${widget}"
+    wrapped_name="_zsh_vim_mode_clip_${verb}_${widget}"
     if [ "${verb}" = copy ]; then
       eval "
         function ${wrapped_name}() {
@@ -369,56 +181,88 @@ function wrap_clipboard_widgets() {
   done
 }
 
-if [[ -z "${VI_MODE_DISABLE_CLIPBOARD:-}" ]]; then
-  wrap_clipboard_widgets copy \
-      vi-yank vi-yank-eol vi-yank-whole-line \
-      vi-change vi-change-eol vi-change-whole-line \
-      vi-kill-line vi-kill-eol vi-backward-kill-word \
-      vi-delete vi-delete-char vi-backward-delete-char
-
-  wrap_clipboard_widgets paste \
-      vi-put-{before,after} \
-      put-replace-selection
-
-  unfunction wrap_clipboard_widgets
-fi
-
 # ----------------------------------------------------------------------------
-# Prompt mode indicator
+# Prompt mode indicator (public)
 # ----------------------------------------------------------------------------
-
-# Per-mode prompt indicators used by vi_mode_prompt_info. Customise any of them;
-# set any to '' to show nothing for that mode (e.g. a blank insert indicator).
-# Assigned with `=` (not `:=`) so an explicit empty value is preserved.
-#
-# The legacy omz names MODE_INDICATOR / INSERT_MODE_INDICATOR still work — if set
-# before the plugin loads they seed the normal / insert indicators.
-typeset -g VI_MODE_INDICATOR_NORMAL=${VI_MODE_INDICATOR_NORMAL=${MODE_INDICATOR-'[Normal]'}}
-typeset -g VI_MODE_INDICATOR_INSERT=${VI_MODE_INDICATOR_INSERT=${INSERT_MODE_INDICATOR-'[Ins]'}}
-typeset -g VI_MODE_INDICATOR_VISUAL=${VI_MODE_INDICATOR_VISUAL='[Visual]'}
-typeset -g VI_MODE_INDICATOR_VLINE=${VI_MODE_INDICATOR_VLINE='[V-Line]'}
-# Operator-pending (the `d` of `dw`) defaults to the normal indicator so it
-# doesn't flash a different value mid-operator; set it for a distinct marker.
-typeset -g VI_MODE_INDICATOR_OPPEND=${VI_MODE_INDICATOR_OPPEND=$VI_MODE_INDICATOR_NORMAL}
 
 function vi_mode_prompt_info() {
+  local REPLY; _zsh_vim_mode_name
   local ind
-  case "${VI_KEYMAP}" in
-    vicmd)  ind=$VI_MODE_INDICATOR_NORMAL ;;
-    viopp)  ind=$VI_MODE_INDICATOR_OPPEND ;;
-    visual)
-      if [[ "${VI_VISUAL_LINE:-0}" == 1 ]]; then
-        ind=$VI_MODE_INDICATOR_VLINE
-      else
-        ind=$VI_MODE_INDICATOR_VISUAL
-      fi
-      ;;
-    *)      ind=$VI_MODE_INDICATOR_INSERT ;;
-  esac
+  zstyle -s ":zsh-vim-mode:$REPLY" indicator ind || ind=$_zsh_vim_mode_indicator_default[$REPLY]
   print -rn -- "$ind"
 }
 
-# define right prompt, if it wasn't defined by a theme
-if [[ -z "$RPS1" && -z "$RPROMPT" ]]; then
-  RPS1='$(vi_mode_prompt_info)'
+# ----------------------------------------------------------------------------
+# Install (guarded so re-sourcing can't double-register / re-clobber bindings)
+# ----------------------------------------------------------------------------
+
+if (( ! ${+_zsh_vim_mode_installed} )); then
+  typeset -g _zsh_vim_mode_installed=1
+
+  # --- insert keymap ---------------------------------------------------------
+  () {
+    local ins; zstyle -s ':zsh-vim-mode:' insert-keymap ins || ins=viins
+    if [[ $ins == emacs ]]; then
+      # Insert mode IS the emacs keymap: full readline editing for free, and it
+      # stays live/order-independent (no enumerating keys). ESC drops to vi
+      # command mode and coexists with the ^[-prefixed meta keys via KEYTIMEOUT.
+      bindkey -e
+      bindkey -A emacs viins              # vi-insert/a/o/... return here, not sparse viins
+      bindkey -M emacs '^[' vi-cmd-mode
+    else
+      # Conventional (sparse) vi insert keymap, plus the common readline keys
+      # that bare viins drops. For full emacs editing use insert-keymap=emacs.
+      bindkey -v
+      local k
+      for k in '^A:beginning-of-line'   '^E:end-of-line' \
+               '^P:up-history'          '^N:down-history' \
+               '^R:history-incremental-search-backward' \
+               '^S:history-incremental-search-forward' \
+               '^?:backward-delete-char' '^H:backward-delete-char' \
+               '^W:backward-kill-word'; do
+        bindkey -M viins "${k%%:*}" "${k#*:}"
+      done
+    fi
+  }
+
+  # --- vv to edit the command line in $EDITOR (vicmd) ------------------------
+  autoload -Uz edit-command-line
+  zle -N edit-command-line
+  bindkey -M vicmd 'vv' edit-command-line
+
+  # --- visual-mode wrappers --------------------------------------------------
+  zle -N visual-mode      _zsh_vim_mode_visual
+  zle -N visual-line-mode _zsh_vim_mode_visual_line
+
+  # --- hooks -----------------------------------------------------------------
+  autoload -Uz add-zsh-hook
+  add-zsh-hook precmd  _zsh_vim_mode_precmd
+  add-zsh-hook preexec _zsh_vim_mode_preexec
+
+  (( ${+functions[add-zle-hook-widget]} )) || \
+    autoload -Uz +X add-zle-hook-widget 2>/dev/null
+  if (( ${+functions[add-zle-hook-widget]} )); then
+    add-zle-hook-widget keymap-select _zsh_vim_mode_keymap_select
+  else
+    function zle-keymap-select() { _zsh_vim_mode_keymap_select "$@" }
+    zle -N zle-keymap-select
+  fi
+
+  # --- clipboard -------------------------------------------------------------
+  if zstyle -T ':zsh-vim-mode:' clipboard; then    # default yes
+    _zsh_vim_mode_clipboard_wrap copy \
+        vi-yank vi-yank-eol vi-yank-whole-line \
+        vi-change vi-change-eol vi-change-whole-line \
+        vi-kill-line vi-kill-eol vi-backward-kill-word \
+        vi-delete vi-delete-char vi-backward-delete-char
+    _zsh_vim_mode_clipboard_wrap paste \
+        vi-put-{before,after} \
+        put-replace-selection
+  fi
+  unfunction _zsh_vim_mode_clipboard_wrap
+
+  # --- default right prompt, if no theme set one -----------------------------
+  if [[ -z "$RPS1" && -z "$RPROMPT" ]]; then
+    RPS1='$(vi_mode_prompt_info)'
+  fi
 fi

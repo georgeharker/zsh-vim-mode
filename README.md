@@ -237,6 +237,28 @@ shape: ZLE doesn't reliably fire `zle-keymap-select` on the `viopp → vicmd`
 return, so a distinct oppend cursor tends to get stuck after e.g. `dw`. Set it
 if you want one anyway.
 
+### Terminals that manage the cursor themselves
+
+Some terminals ship a shell-integration feature that **also** drives the cursor
+shape from the keymap — e.g. Ghostty's `cursor` feature
+(`shell-integration-features` includes `cursor`), and similar in others. That
+makes two stampers fighting over one cursor: the terminal's reads the live
+`$KEYMAP` directly, with no mode tracking, so it paints an insert bar on the
+`main` keymap that ZLE transiently selects during a prompt redraw — exactly the
+flicker-after-`dw` this plugin is built to avoid. Symptom: the cursor snaps back
+to a bar in normal mode after operators (`dw`, `x`, `p`), then corrects on the
+next keypress.
+
+Pick **one** owner. To let this plugin own it (recommended — it has per-mode
+shapes and tracks the real mode), disable the terminal's cursor feature:
+
+- **Ghostty** — add `no-cursor` to `shell-integration-features` in `config`
+  (e.g. `shell-integration-features = no-cursor,sudo,title`), then **fully
+  reload Ghostty** — config changes don't reach already-running shells/windows.
+
+Or do the reverse: let the terminal own it and set `zstyle ':zsh-vim-mode:'
+set-cursor no`.
+
 ## Key bindings
 
 `ESC` or `CTRL-[` enters normal mode. The plugin also binds:

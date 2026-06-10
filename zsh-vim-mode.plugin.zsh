@@ -125,11 +125,15 @@ _zsh_vim_mode_keymap_select() {
 # the cursor is never re-stamped after them. Anything that nudges the cursor in
 # the meantime (a prompt redraw, terminal shell integration, …) then sticks.
 # line-pre-redraw fires after every widget, so we restamp the current mode's
-# cursor here. It's emitted unconditionally (not guarded on a remembered shape)
-# precisely so an *external* change gets corrected — a repeated identical
-# DECSCUSR is a no-op in the terminal.
+# cursor here, from the *tracked* VI_KEYMAP — NOT the live $KEYMAP. During a
+# redraw zsh transiently selects the `main` keymap to re-expand the prompt, so
+# $KEYMAP reads `main` here even while you're in command mode; stamping that
+# would paint an insert-mode bar after every `dw`. keymap-select is the
+# authoritative mode-change signal and keeps VI_KEYMAP correct, so we only
+# re-assert it. It's emitted unconditionally (not guarded on a remembered shape)
+# so an *external* change still gets corrected — a repeated identical DECSCUSR is
+# a no-op in the terminal.
 _zsh_vim_mode_line_pre_redraw() {
-  typeset -g VI_KEYMAP=$KEYMAP
   _zsh_vim_mode_set_cursor
 }
 

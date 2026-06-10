@@ -3,10 +3,9 @@
 A fork of [oh-my-zsh's `vi-mode` plugin](https://github.com/ohmyzsh/ohmyzsh/tree/master/plugins/vi-mode),
 focused on making **prompt redraws on mode changes reliable and well-behaved**.
 
-It is a drop-in replacement: every public variable and function from omz
-`vi-mode` is preserved (`vi_mode_prompt_info`, `MODE_INDICATOR`,
-`VI_MODE_SET_CURSOR`, the cursor variables, the key bindings, clipboard
-integration, etc.).
+The public function `vi_mode_prompt_info` and the vi key bindings are kept, but
+**all configuration is via `zstyle`** under the `:zsh-vim-mode:*` context rather
+than environment variables (see [Configuration](#configuration)).
 
 ## What's different from omz vi-mode
 
@@ -18,9 +17,9 @@ the mode in the prompt. That detection is brittle (themes that build the prompt
 in `precmd`, store the indicator in a variable, or call the function any other
 way all slip past it), so redraws frequently failed to happen.
 
-Here, `VI_MODE_RESET_PROMPT_ON_MODE_CHANGE` defaults to `true`: every switch
-between insert / normal / visual issues `zle reset-prompt; zle -R`, so the
-prompt indicator and cursor always reflect the current mode.
+Here, the `redraw` style defaults to `always`: every switch between insert /
+normal / visual issues `zle reset-prompt; zle -R`, so the prompt indicator and
+cursor always reflect the current mode.
 
 > `zle reset-prompt` re-expands `$PROMPT`/`$RPROMPT` but does **not** re-run
 > `precmd`. For the common pattern of computing expensive things (git status,
@@ -51,10 +50,10 @@ works correctly whether it loads before or after oh-my-posh and the rest.
 
 ### 3. Smarter (optional) auto-detection
 
-If you set `VI_MODE_RESET_PROMPT_ON_MODE_CHANGE=auto`, the plugin redraws only
-when the prompt actually contains the mode indicator — matching the loose
-substring `vi_mode_prompt_info` rather than the exact `$(...)` form, so it
-still fires when a theme calls the function indirectly.
+If you set `zstyle ':zsh-vim-mode:' redraw auto`, the plugin redraws only when
+the prompt actually contains the mode indicator — matching the loose substring
+`vi_mode_prompt_info` rather than the exact `$(...)` form, so it still fires
+when a theme calls the function indirectly.
 
 ## Install
 
@@ -80,74 +79,78 @@ git clone <this-repo> "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-vim-mo
 Loading both the stock `vi-mode` and this plugin is not recommended; this one
 replaces it.
 
-## Settings
+## Configuration
 
-- `VI_MODE_RESET_PROMPT_ON_MODE_CHANGE` — `true` (default) always redraw on mode
-  change; `auto` redraw only if the prompt shows the mode indicator; any other
-  value disables redraws.
-- `VI_MODE_SET_CURSOR` — set to `true` to change the cursor shape per mode
-  (default: unset).
-- `VI_MODE_CURSOR_NORMAL` / `_VISUAL` / `_INSERT` / `_OPPEND` — cursor shapes
-  (see [Cursor styles](#cursor-styles)).
-- `VI_MODE_INDICATOR_NORMAL` / `_INSERT` / `_VISUAL` / `_VLINE` / `_OPPEND` —
-  the per-mode strings emitted by `vi_mode_prompt_info`. See
-  [Mode indicators](#mode-indicators).
-- `VI_MODE_DISABLE_CLIPBOARD` — if set, disables clipboard integration on
-  yank/paste.
-- `VI_MODE_EMACS_INSERT` — set to `true` to make **insert mode behave like the
-  normal (emacs/readline) keymap**: arrow keys, alt-word motion, `^A`/`^E`/`^K`/
-  `^U`, alt-backspace, history search, etc. `ESC` still drops into vi normal
-  mode. The bindings are added to `viins` additively (the keymap is never
-  replaced), so this is order-independent and your own later bindings still win.
-  See [Emacs-style insert mode](#emacs-style-insert-mode).
+Everything is configured with `zstyle`, under the `:zsh-vim-mode:*` context.
+Set these **before** sourcing the plugin (per-mode `indicator`/`cursor` and the
+`redraw`/`redraw-hooks` styles are read live, so they can also be changed later;
+`insert-keymap` and `clipboard` are read once at load).
 
-## Emacs-style insert mode
+### Global — context `:zsh-vim-mode:`
 
-By default this is a normal vi-mode: insert mode has only a handful of
-conveniences and is otherwise spartan. If you'd rather *type* with the editing
-keys you already know and only reach for vi when you press `ESC`, set:
+| style | values | default | meaning |
+|-------|--------|---------|---------|
+| `set-cursor` | bool | `no` | change the cursor shape per mode |
+| `redraw` | `always` \| `auto` \| `never` | `always` | when to redraw the prompt on a mode change (`auto` = only if the prompt contains `vi_mode_prompt_info`) |
+| `insert-keymap` | `viins` \| `emacs` | `viins` | which keymap insert mode uses (see below) |
+| `clipboard` | bool | `yes` | copy/paste yank/put to the system clipboard |
+| `redraw-hooks` | function names | — | functions run just before each mode-change redraw (see [render-baked prompts](#render-baked-prompts-oh-my-posh-etc)) |
 
 ```zsh
-VI_MODE_EMACS_INSERT=true
+zstyle ':zsh-vim-mode:' set-cursor    yes
+zstyle ':zsh-vim-mode:' redraw        always
+zstyle ':zsh-vim-mode:' insert-keymap emacs
 ```
 
-Insert mode (`viins`) then gets the standard readline/emacs set — `Left`/`Right`/
-`Up`/`Down` (including application-keypad `\eO…` forms, since this plugin emits
-`smkx`), `Alt-Left`/`Alt-Right` and `Alt-f`/`Alt-b` for word motion, `^A`/`^E`,
-`^F`/`^B`, `Alt-d`/`Alt-Backspace`/`^W` to kill words, `^K`/`^U`, `^Y`, `^T`/
-`Alt-t`, `^_` undo, `^R`/`^S` history search, `^L` clear. Normal mode (`vicmd`)
-is left as stock vi. Because the keys are bound additively, anything you bind
-afterwards (fzf, a keybinds module, …) overrides these.
+### Per mode — context `:zsh-vim-mode:<mode>`
 
-## Mode indicators
+`<mode>` is one of `normal`, `insert`, `visual`, `visual-line`, `op`
+(operator-pending).
 
-`vi_mode_prompt_info` emits a string for the current mode, chosen from these
-variables (defaults shown):
+| style | meaning |
+|-------|---------|
+| `indicator` | string emitted by `vi_mode_prompt_info`; `''` shows nothing |
+| `cursor` | `block`, `line`/`bar`, `underline`, any `blink-*`, or a raw DECSCUSR `0`–`6` |
 
 ```zsh
-VI_MODE_INDICATOR_NORMAL='[Normal]'   # vicmd
-VI_MODE_INDICATOR_INSERT='[Ins]'      # main / viins
-VI_MODE_INDICATOR_VISUAL='[Visual]'   # charwise visual
-VI_MODE_INDICATOR_VLINE='[V-Line]'    # linewise visual
-VI_MODE_INDICATOR_OPPEND="$VI_MODE_INDICATOR_NORMAL"  # operator-pending (d, c, …)
+zstyle ':zsh-vim-mode:normal'      indicator '[Normal]'
+zstyle ':zsh-vim-mode:insert'      indicator ''          # blank insert indicator
+zstyle ':zsh-vim-mode:visual'      indicator '[Visual]'
+zstyle ':zsh-vim-mode:visual-line' indicator '[V-Line]'
+zstyle ':zsh-vim-mode:normal'      cursor    block
+zstyle ':zsh-vim-mode:insert'      cursor    line
 ```
 
-Set any of them to customise the label, including `''` to show nothing for that
-mode (e.g. `VI_MODE_INDICATOR_INSERT=''` for a blank insert indicator). Values
-go through prompt expansion when used in a zsh `$PROMPT`/`$RPROMPT`, so
-`%F{…}`/`%B` sequences work there; for oh-my-posh, use plain text or omp markup
-since the value is rendered by the omp binary.
-
-The legacy oh-my-zsh names `MODE_INDICATOR` and `INSERT_MODE_INDICATOR` still
-work: if set before the plugin loads they seed the normal and insert indicators.
+Indicator defaults are `[Normal]` `[Ins]` `[Visual]` `[V-Line]` (and `op`
+follows normal). Indicator values go through prompt expansion in a zsh
+`$PROMPT`/`$RPROMPT`, so `%F{…}`/`%B` work there; for oh-my-posh use plain text
+or omp markup, since the value is rendered by the omp binary.
 
 > Replace mode (`R`) currently reports as insert — it isn't a distinct keymap,
 > so the prompt can't tell it apart without wrapping the `vi-replace` widget.
 
+## Insert keymap
+
+`insert-keymap` controls what insert mode actually *is*:
+
+- `viins` (default) — the conventional, sparse vi insert keymap. The plugin
+  re-adds the common readline keys it drops (`^A`/`^E`, `^P`/`^N`, `^R`/`^S`,
+  `^W`, `^?`/`^H`).
+- `emacs` — insert mode **is the emacs keymap**. You get the full readline
+  editing set (arrows, `Alt`-word motion, `^A`/`^E`/`^K`/`^U`/`^Y`, history
+  search, …) for free and *live*: anything bound to the emacs keymap by you or
+  another plugin is active in insert mode, regardless of load order. `ESC` drops
+  to vi command mode (it coexists with the `Alt`/meta keys via `$KEYTIMEOUT`).
+  Normal/visual/operator modes are unchanged.
+
+```zsh
+zstyle ':zsh-vim-mode:' insert-keymap emacs
+```
+
 ## Showing the mode in your prompt
 
 The plugin core is prompt-agnostic: on every mode change it sets `VI_KEYMAP`,
-runs any `vi_mode_before_redraw_functions` (see below), and issues
+runs the functions in the `redraw-hooks` style, and issues
 `zle reset-prompt; zle -R`. How the indicator reaches the screen depends on
 which kind of prompt you use.
 
@@ -172,9 +175,22 @@ These render once per `precmd` into a static string, so `reset-prompt` alone
 redraws the *old* mode. oh-my-posh is the common case: its indicator comes from
 an env var (e.g. `$VIMODE`) that the `oh-my-posh` binary reads at render time.
 
-Append a function to `vi_mode_before_redraw_functions`. The plugin calls each
-entry — inside the ZLE widget, right before it issues `reset-prompt` — so you
-re-render omp there, then the plugin's `reset-prompt` displays the result:
+First, add a segment to your oh-my-posh theme that renders the env var (a
+`text` segment reading `{{ .Env.VIMODE }}` — put it in whichever block you like;
+the right/rprompt block is common):
+
+```toml
+[[blocks.segments]]
+  template   = '{{ .Env.VIMODE }}'
+  foreground = 'p:white'
+  background = 'transparent'
+  type       = 'text'
+  style      = 'plain'
+```
+
+Then keep it live: register a function in the `redraw-hooks` style. The plugin
+calls each — inside the ZLE widget, right before it issues `reset-prompt` — so
+you re-render omp there, then the plugin's `reset-prompt` displays the result:
 
 ```zsh
 function set_poshcontext() { export VIMODE="$(vi_mode_prompt_info)" }
@@ -182,7 +198,7 @@ function _vimode_omp_render() {
   set_poshcontext                   # refresh $VIMODE for the new mode
   RPROMPT=$(_omp_get_prompt right)   # re-render the block that shows it
 }
-vi_mode_before_redraw_functions+=(_vimode_omp_render)
+zstyle ':zsh-vim-mode:' redraw-hooks _vimode_omp_render
 ```
 
 `_omp_get_prompt` is the least-invasive render omp exposes: it only *reads*
@@ -190,7 +206,7 @@ omp's cached state (status, execution-time, …) and prints, so it doesn't reset
 those segments — it's the same call omp's tooltip feature uses. Render only the
 block carrying the indicator (`right` here).
 
-The simpler `vi_mode_before_redraw_functions+=(_omp_precmd)` also works — it
+The simpler `zstyle ':zsh-vim-mode:' redraw-hooks _omp_precmd` also works — it
 re-runs omp's whole precmd render (and refreshes `VIMODE` via `set_poshcontext`
 itself) — but it re-captures `$?` and execution time, so the status and timing
 segments reset on every mode change. Prefer `_omp_get_prompt`.
@@ -200,24 +216,26 @@ or not oh-my-posh streaming is enabled; streaming only affects the left prompt.
 
 ## Cursor styles
 
+Set `set-cursor` and a per-mode `cursor` (defaults shown):
+
 ```zsh
-VI_MODE_SET_CURSOR=true
-# defaults
-VI_MODE_CURSOR_NORMAL=2   # solid block
-VI_MODE_CURSOR_VISUAL=6   # solid line
-VI_MODE_CURSOR_INSERT=6   # solid line
-VI_MODE_CURSOR_OPPEND=2   # follows NORMAL (see below)
+zstyle ':zsh-vim-mode:'            set-cursor yes
+zstyle ':zsh-vim-mode:normal'      cursor block       # solid block
+zstyle ':zsh-vim-mode:insert'      cursor line        # solid line (bar)
+zstyle ':zsh-vim-mode:visual'      cursor line
+zstyle ':zsh-vim-mode:visual-line' cursor line
+zstyle ':zsh-vim-mode:op'          cursor block       # operator-pending; follows normal
 ```
 
-`VI_MODE_CURSOR_OPPEND` (the cursor while an operator like `d` waits for its
-motion) defaults to the **normal-mode** shape, not omz's `0`. ZLE doesn't
-reliably fire `zle-keymap-select` on the `viopp → vicmd` return, so a distinct
-operator-pending shape tends to get stuck after e.g. `dw`; keeping it equal to
-normal avoids that. Set it explicitly if you want a separate oppend cursor.
+A `cursor` is a name — `block`, `line`/`bar`, `underline`, or any `blink-*` —
+or a raw DECSCUSR number `0`–`6` (`0` default · `1` blink-block · `2` block ·
+`3` blink-underline · `4` underline · `5` blink-line · `6` line). See
+[DECSCUSR](https://vt100.net/docs/vt510-rm/DECSCUSR).
 
-`0,1` blinking block · `2` solid block · `3` blinking underline ·
-`4` solid underline · `5` blinking line · `6` solid line.
-See [DECSCUSR](https://vt100.net/docs/vt510-rm/DECSCUSR).
+Operator-pending (`op`) defaults to the **normal** cursor rather than a distinct
+shape: ZLE doesn't reliably fire `zle-keymap-select` on the `viopp → vicmd`
+return, so a distinct oppend cursor tends to get stuck after e.g. `dw`. Set it
+if you want one anyway.
 
 ## Key bindings
 
@@ -231,7 +249,7 @@ See [DECSCUSR](https://vt100.net/docs/vt510-rm/DECSCUSR).
 - `v` (normal mode) — visual mode
 
 Yank/delete/change copy to the system clipboard; `p`/`P` paste from it (unless
-`VI_MODE_DISABLE_CLIPBOARD` is set).
+`zstyle ':zsh-vim-mode:' clipboard no`).
 
 ### Low `$KEYTIMEOUT`
 

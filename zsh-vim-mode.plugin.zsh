@@ -120,6 +120,19 @@ _zsh_vim_mode_keymap_select() {
   _zsh_vim_mode_set_cursor
 }
 
+# Re-assert the cursor on every redraw. vi command-mode operators (dw, x, p, …)
+# DON'T change the keymap — you stay in vicmd — so keymap-select never fires and
+# the cursor is never re-stamped after them. Anything that nudges the cursor in
+# the meantime (a prompt redraw, terminal shell integration, …) then sticks.
+# line-pre-redraw fires after every widget, so we restamp the current mode's
+# cursor here. It's emitted unconditionally (not guarded on a remembered shape)
+# precisely so an *external* change gets corrected — a repeated identical
+# DECSCUSR is a no-op in the terminal.
+_zsh_vim_mode_line_pre_redraw() {
+  typeset -g VI_KEYMAP=$KEYMAP
+  _zsh_vim_mode_set_cursor
+}
+
 # `visual-mode` / `visual-line-mode` don't emit a keymap-select event on their
 # own; wrap them to track the charwise/linewise distinction (VI_VISUAL_LINE) and
 # keep the cursor/prompt in sync. The flag is set before the real widget so a
@@ -242,10 +255,13 @@ if (( ! ${+_zsh_vim_mode_installed} )); then
   (( ${+functions[add-zle-hook-widget]} )) || \
     autoload -Uz +X add-zle-hook-widget 2>/dev/null
   if (( ${+functions[add-zle-hook-widget]} )); then
-    add-zle-hook-widget keymap-select _zsh_vim_mode_keymap_select
+    add-zle-hook-widget keymap-select   _zsh_vim_mode_keymap_select
+    add-zle-hook-widget line-pre-redraw _zsh_vim_mode_line_pre_redraw
   else
-    function zle-keymap-select() { _zsh_vim_mode_keymap_select "$@" }
+    function zle-keymap-select()   { _zsh_vim_mode_keymap_select "$@" }
+    function zle-line-pre-redraw() { _zsh_vim_mode_line_pre_redraw "$@" }
     zle -N zle-keymap-select
+    zle -N zle-line-pre-redraw
   fi
 
   # --- clipboard -------------------------------------------------------------

@@ -39,9 +39,10 @@ wrappers chain into each other and zsh aborts with:
 _omp_decorated_zle-line-init: maximum nested function level reached; increase FUNCNEST?
 ```
 
-This plugin sidesteps that entirely. The only zle widget it hooks is
-`keymap-select` — the actual mode-change event that drives the redraw — via
-`add-zle-hook-widget` (nothing else wraps that widget). Everything omz did in
+This plugin sidesteps that entirely. The only zle widgets it hooks are
+`keymap-select` — the actual mode-change event that drives the redraw — and
+`line-pre-redraw` (which re-asserts the cursor shape after every widget), both
+via `add-zle-hook-widget` (nothing contested wraps those). Everything omz did in
 the `zle-line-init` / `zle-line-finish` *widgets* (reset to insert mode, cursor
 shape, keypad mode) is instead done in `precmd` / `preexec`, registered with
 `add-zsh-hook`. Those are plain hook arrays with no wrap/absorb semantics, so
@@ -60,7 +61,7 @@ when a theme calls the function indirectly.
 ### Manual
 
 ```zsh
-git clone <this-repo> ~/.zsh/zsh-vim-mode
+git clone https://github.com/georgeharker/zsh-vim-mode ~/.zsh/zsh-vim-mode
 echo 'source ~/.zsh/zsh-vim-mode/zsh-vim-mode.plugin.zsh' >> ~/.zshrc
 ```
 
@@ -72,7 +73,7 @@ zsh-autosuggestions, fast-syntax-highlighting, etc.
 Clone into your custom plugins dir and replace `vi-mode` in your plugin list:
 
 ```zsh
-git clone <this-repo> "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-vim-mode"
+git clone https://github.com/georgeharker/zsh-vim-mode "${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins/zsh-vim-mode"
 # plugins=(... zsh-vim-mode)   # remove the stock `vi-mode`
 ```
 
@@ -83,8 +84,8 @@ replaces it.
 
 Everything is configured with `zstyle`, under the `:zsh-vim-mode:*` context.
 Set these **before** sourcing the plugin (per-mode `indicator`/`cursor` and the
-`redraw`/`redraw-hooks` styles are read live, so they can also be changed later;
-`insert-keymap` and `clipboard` are read once at load).
+`set-cursor`/`redraw`/`redraw-hooks` styles are read live, so they can also be
+changed later; `insert-keymap` and `clipboard` are read once at load).
 
 ### Global — context `:zsh-vim-mode:`
 
@@ -271,7 +272,9 @@ set-cursor no`.
 - `v` (normal mode) — visual mode
 
 Yank/delete/change copy to the system clipboard; `p`/`P` paste from it (unless
-`zstyle ':zsh-vim-mode:' clipboard no`).
+`zstyle ':zsh-vim-mode:' clipboard no`). This uses the `clipcopy`/`clippaste`
+helpers — oh-my-zsh provides them; on a manual install define your own (or the
+integration silently no-ops).
 
 ### Low `$KEYTIMEOUT`
 

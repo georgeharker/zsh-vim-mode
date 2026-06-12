@@ -3,6 +3,9 @@
 A fork of [oh-my-zsh's `vi-mode` plugin](https://github.com/ohmyzsh/ohmyzsh/tree/master/plugins/vi-mode),
 focused on making **prompt redraws on mode changes reliable and well-behaved**.
 
+> 📖 Rendered documentation:
+> [docs.georgeharker.com/zsh-vim-mode](https://docs.georgeharker.com/zsh-vim-mode/)
+
 The public function `vi_mode_prompt_info` and the vi key bindings are kept, but
 **all configuration is via `zstyle`** under the `:zsh-vim-mode:*` context rather
 than environment variables (see [Configuration](#configuration)).
